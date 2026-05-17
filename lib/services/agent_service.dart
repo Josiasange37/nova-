@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:nova/models/action_model.dart';
 import 'package:nova/services/ladb_service.dart';
@@ -141,12 +142,18 @@ class AgentService {
   /// Calls the BigModel API and returns (thinking, rawAction).
   Future<(String, String?)> _callBigModel() async {
     final apiKey = SettingsService.getApiKey();
+    if (apiKey.isEmpty || apiKey == SettingsService.defaultApiKey) {
+      logService.log('❌ Error: No API key configured. Open Setup to set it.');
+      return ('', null);
+    }
+
     try {
+      final token = _generateToken(apiKey);
       final response = await http.post(
         Uri.parse(_bigModelUrl),
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer $apiKey',
+          'Authorization': 'Bearer $token',
         },
         body: jsonEncode({
           'model': _model,
@@ -166,8 +173,42 @@ class AgentService {
         return ('', null);
       }
     } catch (e) {
-      logService.log('⚠ Network error: $e');
+      logService.log('⚠ Network/Auth error: $e');
       return ('', null);
+    }
+  }
+
+  /// Generates a JWT token for BigModel (Zhipu AI) v4 API.
+  String _generateToken(String apikey) {
+    try {
+      final parts = apikey.split('.');
+      if (parts.length != 2) return apikey; // Fallback to raw key if invalid format
+
+      final id = parts[0];
+      final secret = parts[1];
+
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final exp = now + 3600000; // 1 hour expiration
+
+      final header = base64Url.encode(utf8.encode(jsonEncode({
+        'alg': 'HS256',
+        'sign_type': 'SIGN',
+      }))).replaceAll('=', '');
+
+      final payload = base64Url.encode(utf8.encode(jsonEncode({
+        'api_key': id,
+        'exp': exp,
+        'timestamp': now,
+      }))).replaceAll('=', '');
+
+      final signature = Hmac(sha256, utf8.encode(secret))
+          .convert(utf8.encode('$header.$payload'));
+      
+      final signatureB64 = base64Url.encode(signature.bytes).replaceAll('=', '');
+
+      return '$header.$payload.$signatureB64';
+    } catch (e) {
+      return apikey; // Fallback
     }
   }
 
@@ -208,23 +249,23 @@ class AgentService {
 
     switch (action.action) {
       case ActionType.tap:
-        final coord = p['coordinate'] as List<double>?;
-        if (coord != null && coord.length >= 2) {
-          final x = (coord[0] * w).toInt();
-          final y = (coord[1] * h).toInt();
+        final coordRaw = p['coordinate'] as List?;
+        if (coordRaw != null && coordRaw.length >= 2) {
+          final x = ((double.tryParse(coordRaw[0].toString()) ?? 0.0) * w).toInt();
+          final y = ((double.tryParse(coordRaw[1].toString()) ?? 0.0) * h).toInt();
           await LadbService.execute('input tap $x $y');
           logService.log('  → tap ($x, $y)');
         }
         break;
 
       case ActionType.swipe:
-        final coord = p['coordinate'] as List<double>?;
+        final coordRaw = p['coordinate'] as List?;
         final dur = p['duration'] as int? ?? 500;
-        if (coord != null && coord.length >= 4) {
-          final x1 = (coord[0] * w).toInt();
-          final y1 = (coord[1] * h).toInt();
-          final x2 = (coord[2] * w).toInt();
-          final y2 = (coord[3] * h).toInt();
+        if (coordRaw != null && coordRaw.length >= 4) {
+          final x1 = ((double.tryParse(coordRaw[0].toString()) ?? 0.0) * w).toInt();
+          final y1 = ((double.tryParse(coordRaw[1].toString()) ?? 0.0) * h).toInt();
+          final x2 = ((double.tryParse(coordRaw[2].toString()) ?? 0.0) * w).toInt();
+          final y2 = ((double.tryParse(coordRaw[3].toString()) ?? 0.0) * h).toInt();
           await LadbService.execute('input swipe $x1 $y1 $x2 $y2 $dur');
           logService.log('  → swipe ($x1,$y1)→($x2,$y2)');
         }
