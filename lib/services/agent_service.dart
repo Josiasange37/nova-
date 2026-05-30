@@ -11,30 +11,31 @@ const String _bigModelUrl =
     'https://open.bigmodel.cn/api/paas/v4/chat/completions';
 const String _model = 'autoglm-phone';
 
-// System prompt adapted from Open-AutoGLM
-const String _systemPrompt = '''You are Nova, an AI agent that controls an Android phone on behalf of the user. 
-You will be given a task and a screenshot of the current screen. 
-Analyze the screen, think step by step, then output ONE action.
+// System prompt strictly aligned with Open-AutoGLM's expected model behavior
+const String _systemPrompt = '''You are Nova, a professional Android AI agent. 
+Your goal is to execute the user's task using ADB commands.
+You see a screenshot of the current screen with dimensions. 
 
-Output format (mandatory):
-- To tap: do(action="tap", coordinate=[x, y])
-- To swipe: do(action="swipe", coordinate=[x1, y1, x2, y2], duration=500)
-- To type text: do(action="type", text="your text here")
-- To press a key: do(action="press", key="home"|"back"|"enter"|"recent")
-- To open an app: do(action="launch", app="package.name")
-- When done: finish(message="description of what was accomplished")
+Rules:
+1. Analyze the screen and output EXACTLY ONE action.
+2. IMPORTANT: If you see the "Nova" app or terminal logs on the screen, ignore them. Focus on the background apps or the task.
+3. Be extremely concise in your thinking.
+4. Output format:
+   - do(action="Tap", element=[x, y])
+   - do(action="Swipe", start=[x1, y1], end=[x2, y2], duration=500)
+   - do(action="Type", text="text content")
+   - do(action="Press", key="home"|"back"|"enter"|"recent")
+   - do(action="Launch", app="package.name")
+   - do(action="Wait", duration=2000)
+   - finish(message="done")
 
-Coordinates are normalized between 0.0 and 1.0 (relative to screen size).
-x=0 is left, x=1 is right, y=0 is top, y=1 is bottom.
-Always output ONLY the action line and nothing else after it.
-Think carefully before acting. If the task is complete, call finish().
-Respond in English only.''';
+Coordinates: [0-1000] (0 is top/left, 1000 is bottom/right). Respond ONLY in English.''';
 
 class AgentService {
   final LogService logService;
   bool _isRunning = false;
 
-  // Conversation history (maintained across steps like Open-AutoGLM)
+  // Reading the coordinate context
   final List<Map<String, dynamic>> _context = [];
 
   AgentService(this.logService);
@@ -50,14 +51,12 @@ class AgentService {
 
     logService.log('▶ Starting task: "$instruction"');
 
-    // Check ADB connection
     if (!await LadbService.isConnected()) {
       logService.log('❌ ADB not connected. Open Settings to pair/connect first.');
       _isRunning = false;
       return;
     }
 
-    // Build initial system message
     _context.add({'role': 'system', 'content': _systemPrompt});
 
     int step = 0;
@@ -68,7 +67,6 @@ class AgentService {
         step++;
         logService.log('── Step $step/$maxSteps ──');
 
-        // 1. Capture screenshot
         logService.log('📷 Capturing screen...');
         final screenshotB64 = await ScreenshotService.captureAsBase64();
         if (screenshotB64 == null || screenshotB64.isEmpty) {
@@ -76,7 +74,6 @@ class AgentService {
           break;
         }
 
-        // 2. Build user message for this step
         final String userText = step == 1
             ? instruction
             : '** Continuing task ** Current screen state shown.';
@@ -92,7 +89,6 @@ class AgentService {
           ],
         });
 
-        // 3. Call BigModel API
         logService.log('🧠 Consulting BigModel AI...');
         final (thinking, rawAction) = await _callBigModel();
         if (rawAction == null) {
@@ -102,11 +98,10 @@ class AgentService {
 
         if (thinking.isNotEmpty) logService.log('💭 $thinking');
 
-        // 4. Parse action
         final action = ActionModel.fromResponse(thinking, rawAction);
         logService.log('🎯 Action: ${action.action.name}  ${action.params}');
 
-        // Add assistant response to context (without image to save tokens)
+        // Cleanup context to save tokens
         _context.last = {
           'role': 'user',
           'content': [
@@ -118,16 +113,18 @@ class AgentService {
           'content': '<think>$thinking</think><answer>$rawAction</answer>',
         });
 
-        // 5. Execute action
         if (action.action == ActionType.finish) {
           logService.log('✅ Done: ${action.params['message']}');
           break;
         }
 
-        await _executeAction(action);
+        if (action.action == ActionType.unknown) {
+           logService.log('⚠ Could not parse action: "$rawAction"');
+        } else {
+           await _executeAction(action);
+        }
 
-        // Small delay before next step
-        await Future.delayed(const Duration(milliseconds: 1500));
+        await Future.delayed(const Duration(milliseconds: 1000));
       }
 
       if (step >= maxSteps) logService.log('⚠ Max steps reached.');
@@ -139,7 +136,6 @@ class AgentService {
     }
   }
 
-  /// Calls the BigModel API and returns (thinking, rawAction).
   Future<(String, String?)> _callBigModel() async {
     final apiKey = SettingsService.getApiKey();
     if (apiKey.isEmpty || apiKey == SettingsService.defaultApiKey) {
@@ -162,7 +158,7 @@ class AgentService {
           'temperature': 0.0,
           'top_p': 0.85,
         }),
-      ).timeout(const Duration(seconds: 60));
+      ).timeout(const Duration(seconds: 120));
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -178,94 +174,72 @@ class AgentService {
     }
   }
 
-  /// Generates a JWT token for BigModel (Zhipu AI) v4 API.
   String _generateToken(String apikey) {
     try {
       final parts = apikey.split('.');
-      if (parts.length != 2) return apikey; // Fallback to raw key if invalid format
-
+      if (parts.length != 2) return apikey;
       final id = parts[0];
       final secret = parts[1];
-
       final now = DateTime.now().millisecondsSinceEpoch;
-      final exp = now + 3600000; // 1 hour expiration
+      final exp = now + 3600000;
 
-      final header = base64Url.encode(utf8.encode(jsonEncode({
-        'alg': 'HS256',
-        'sign_type': 'SIGN',
-      }))).replaceAll('=', '');
-
-      final payload = base64Url.encode(utf8.encode(jsonEncode({
-        'api_key': id,
-        'exp': exp,
-        'timestamp': now,
-      }))).replaceAll('=', '');
-
-      final signature = Hmac(sha256, utf8.encode(secret))
-          .convert(utf8.encode('$header.$payload'));
-      
+      final header = base64Url.encode(utf8.encode(jsonEncode({'alg': 'HS256', 'sign_type': 'SIGN'}))).replaceAll('=', '');
+      final payload = base64Url.encode(utf8.encode(jsonEncode({'api_key': id, 'exp': exp, 'timestamp': now}))).replaceAll('=', '');
+      final signature = Hmac(sha256, utf8.encode(secret)).convert(utf8.encode('$header.$payload'));
       final signatureB64 = base64Url.encode(signature.bytes).replaceAll('=', '');
 
       return '$header.$payload.$signatureB64';
-    } catch (e) {
-      return apikey; // Fallback
-    }
+    } catch (e) { return apikey; }
   }
 
-  /// Parses the model response into (thinking, actionString).
   (String, String?) _parseResponse(String content) {
     content = content.trim();
-
-    // Format: <think>...</think><answer>...</answer>
     if (content.contains('<answer>')) {
       final parts = content.split('<answer>');
       final thinking = parts[0].replaceAll('<think>', '').replaceAll('</think>', '').trim();
       final action = parts[1].replaceAll('</answer>', '').trim();
       return (thinking, action);
     }
-
-    // Format: thinking text ... do(action=...) or finish(...)
-    for (final marker in ['do(action=', 'finish(message=', 'finish(']) {
-      if (content.contains(marker)) {
-        final idx = content.indexOf(marker);
-        final thinking = content.substring(0, idx).trim();
-        final action = content.substring(idx).trim();
-        return (thinking, action);
-      }
+    // Fallback: search for do( or finish(
+    final markerMatch = RegExp(r'(do\(|finish\()', caseSensitive: false).firstMatch(content);
+    if (markerMatch != null) {
+      final idx = markerMatch.start;
+      return (content.substring(0, idx).trim(), content.substring(idx).trim());
     }
-
     return ('', content);
   }
 
-  /// Executes a parsed action via LADB.
   Future<void> _executeAction(ActionModel action) async {
     final p = action.params;
-
-    // Get screen dimensions for coordinate conversion
     final sizeOut = await LadbService.execute('wm size');
     final m = RegExp(r'(\d+)x(\d+)').firstMatch(sizeOut);
     final w = double.tryParse(m?.group(1) ?? '1080') ?? 1080;
     final h = double.tryParse(m?.group(2) ?? '2400') ?? 2400;
 
+    // Helper to scale coordinates (Open-AutoGLM uses 0-1000)
+    int scaleX(double x) => (x > 1.0 ? (x / 1000.0 * w) : (x * w)).toInt();
+    int scaleY(double y) => (y > 1.0 ? (y / 1000.0 * h) : (y * h)).toInt();
+
     switch (action.action) {
       case ActionType.tap:
-        final coordRaw = p['coordinate'] as List?;
-        if (coordRaw != null && coordRaw.length >= 2) {
-          final x = ((double.tryParse(coordRaw[0].toString()) ?? 0.0) * w).toInt();
-          final y = ((double.tryParse(coordRaw[1].toString()) ?? 0.0) * h).toInt();
+        final coord = p['coordinate'] as List<double>?;
+        if (coord != null && coord.length >= 2) {
+          final x = scaleX(coord[0]);
+          final y = scaleY(coord[1]);
           await LadbService.execute('input tap $x $y');
           logService.log('  → tap ($x, $y)');
         }
         break;
 
       case ActionType.swipe:
-        final coordRaw = p['coordinate'] as List?;
+        final start = p['start'] as List<double>? ?? p['coordinate'] as List<double>?;
+        final end = p['end'] as List<double>?;
         final dur = p['duration'] as int? ?? 500;
-        if (coordRaw != null && coordRaw.length >= 4) {
-          final x1 = ((double.tryParse(coordRaw[0].toString()) ?? 0.0) * w).toInt();
-          final y1 = ((double.tryParse(coordRaw[1].toString()) ?? 0.0) * h).toInt();
-          final x2 = ((double.tryParse(coordRaw[2].toString()) ?? 0.0) * w).toInt();
-          final y2 = ((double.tryParse(coordRaw[3].toString()) ?? 0.0) * h).toInt();
+        if (start != null && end != null && start.length >= 2 && end.length >= 2) {
+          final x1 = scaleX(start[0]);
+          final y1 = scaleY(start[1]);
+          final x2 = scaleX(end[0]);
+          final y2 = scaleY(end[1]);
           await LadbService.execute('input swipe $x1 $y1 $x2 $y2 $dur');
           logService.log('  → swipe ($x1,$y1)→($x2,$y2)');
         }
@@ -278,19 +252,22 @@ class AgentService {
         break;
 
       case ActionType.press:
-        final keyMap = {
-          'home': '3', 'back': '4', 'enter': '66',
-          'recent': '187', 'delete': '67',
-        };
-        final key = keyMap[p['key']] ?? '3';
-        await LadbService.execute('input keyevent $key');
-        logService.log('  → press ${p['key']}');
+        final k = p['key']?.toString().toLowerCase() ?? 'home';
+        final keyEvent = k == 'home' ? '3' : k == 'back' ? '4' : k == 'enter' ? '66' : '3';
+        await LadbService.execute('input keyevent $keyEvent');
+        logService.log('  → press $k');
         break;
 
       case ActionType.launch:
         final app = p['app'] as String? ?? '';
-        await LadbService.execute('monkey -p $app 1');
+        await LadbService.execute('monkey -p $app -c android.intent.category.LAUNCHER 1');
         logService.log('  → launch $app');
+        break;
+
+      case ActionType.wait:
+        final ms = p['duration'] as int? ?? 2000;
+        logService.log('  → wait ${ms}ms');
+        await Future.delayed(Duration(milliseconds: ms));
         break;
 
       case ActionType.finish:
