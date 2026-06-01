@@ -1,6 +1,9 @@
 package com.nova.nova
 
 import android.os.Bundle
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import java.io.ByteArrayOutputStream
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -114,11 +117,28 @@ class MainActivity : FlutterActivity() {
             put("TMPDIR", cacheDir.path)
         }
         val proc = pb.start()
-        val bytes = proc.inputStream.readBytes()
+        val rawBytes = proc.inputStream.readBytes()
         proc.waitFor()
 
         runShell("rm $tmpPath")
-        return bytes
+
+        if (rawBytes.isEmpty()) return rawBytes
+
+        try {
+            val bitmap = BitmapFactory.decodeByteArray(rawBytes, 0, rawBytes.size) ?: return rawBytes
+            val targetWidth = 500
+            val targetHeight = (bitmap.height * (targetWidth.toDouble() / bitmap.width.toDouble())).toInt()
+            val scaledBitmap = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+            val outputStream = ByteArrayOutputStream()
+            scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 40, outputStream)
+            bitmap.recycle()
+            if (scaledBitmap != bitmap) {
+                scaledBitmap.recycle()
+            }
+            return outputStream.toByteArray()
+        } catch (e: Exception) {
+            return rawBytes
+        }
     }
 
     /** Run a shell command on the target device. */
