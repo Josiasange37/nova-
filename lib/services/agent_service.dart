@@ -1,11 +1,15 @@
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:nova/models/action_model.dart';
 import 'package:nova/services/ladb_service.dart';
 import 'package:nova/services/log_service.dart';
 import 'package:nova/services/screenshot_service.dart';
 import 'package:nova/services/settings_service.dart';
+
+enum AvatarState { idle, listening, thinking, talking }
+
 
 const String _bigModelUrl =
     'https://open.bigmodel.cn/api/paas/v4/chat/completions';
@@ -167,6 +171,7 @@ class AgentService {
   bool _isRunning = false;
 
   final List<Map<String, dynamic>> _context = [];
+  final ValueNotifier<AvatarState> stateNotifier = ValueNotifier<AvatarState>(AvatarState.idle);
 
   AgentService(this.logService);
 
@@ -178,12 +183,14 @@ class AgentService {
     if (_isRunning) return;
     _isRunning = true;
     _context.clear();
+    stateNotifier.value = AvatarState.thinking;
 
     logService.log('▶ Starting task: "$instruction"');
 
     if (!await LadbService.isConnected()) {
       logService.log('❌ ADB not connected. Open Settings to pair/connect first.');
       _isRunning = false;
+      stateNotifier.value = AvatarState.idle;
       return;
     }
 
@@ -196,6 +203,7 @@ class AgentService {
       while (_isRunning && step < maxSteps) {
         step++;
         logService.log('── Step $step/$maxSteps ──');
+        stateNotifier.value = AvatarState.thinking;
 
         if (step == 1) {
           logService.log('🏠 Minimizing Nova...');
@@ -256,6 +264,9 @@ class AgentService {
         if (action.action == ActionType.unknown) {
           logService.log('⚠ Could not parse action: "$rawAction"');
         } else {
+          if (action.action != ActionType.wait) {
+            stateNotifier.value = AvatarState.talking;
+          }
           await _executeAction(action);
         }
 
@@ -267,6 +278,7 @@ class AgentService {
       logService.log('💥 Error: $e');
     } finally {
       _isRunning = false;
+      stateNotifier.value = AvatarState.idle;
       logService.log('■ Agent stopped.');
     }
   }
