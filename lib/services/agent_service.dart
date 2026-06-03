@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:http/http.dart' as http;
 import 'package:nova/models/action_model.dart';
 import 'package:nova/services/ladb_service.dart';
@@ -173,6 +174,7 @@ class AgentService {
 
   final List<Map<String, dynamic>> _context = [];
   final ValueNotifier<AvatarState> stateNotifier = ValueNotifier<AvatarState>(AvatarState.idle);
+  final FlutterTts _tts = FlutterTts();
 
   AgentService(this.logService);
 
@@ -181,6 +183,26 @@ class AgentService {
   void stop() {
     _isRunning = false;
     stateNotifier.value = AvatarState.idle;
+    _stopSpeak();
+  }
+
+  Future<void> _speak(String text) async {
+    try {
+      await _tts.setLanguage("en-US");
+      await _tts.setPitch(1.0);
+      await _tts.setSpeechRate(0.55);
+      await _tts.speak(text);
+    } catch (e) {
+      debugPrint('TTS speak failed: $e');
+    }
+  }
+
+  Future<void> _stopSpeak() async {
+    try {
+      await _tts.stop();
+    } catch (e) {
+      debugPrint('TTS stop failed: $e');
+    }
   }
 
   Future<void> runTask(String instruction) async {
@@ -269,7 +291,14 @@ class AgentService {
         });
 
         if (action.action == ActionType.finish) {
-          logService.log('✅ Done: ${action.params['message']}');
+          final msg = action.params['message'] as String? ?? 'Task completed';
+          logService.log('✅ Done: $msg');
+          if (_isRunning) {
+            _speak(msg);
+            stateNotifier.value = AvatarState.talking;
+            final durationMs = min(msg.length * 60, 4000);
+            await Future.delayed(Duration(milliseconds: durationMs));
+          }
           break;
         }
 
@@ -535,11 +564,12 @@ class AgentService {
         logService.log('💭 Nova: $content');
 
         if (_isRunning) {
+          _speak(content);
           // Transition to talking state to animate mouth
           stateNotifier.value = AvatarState.talking;
 
-          // Simulating speech time based on response length (e.g. 50ms per character, max 5s)
-          final durationMs = min(content.length * 50, 5000);
+          // Simulating speech time based on response length (e.g. 60ms per character, max 5s)
+          final durationMs = min(content.length * 60, 5000);
           await Future.delayed(Duration(milliseconds: durationMs));
         }
       } else {

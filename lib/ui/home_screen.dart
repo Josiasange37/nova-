@@ -284,44 +284,86 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
 
-            // Dynamic Subtitle Status Text
+            // Dynamic Speech Bubble / Status Text
             ValueListenableBuilder<AvatarState>(
               valueListenable: _agent.stateNotifier,
               builder: (context, state, child) {
                 String status = 'Nova is ready';
-                Color color = const Color(0xFF8B949E);
+                bool isBubble = false;
+                Color textColor = const Color(0xFF8B949E);
+
                 switch (state) {
                   case AvatarState.idle:
                     status = 'Nova is ready';
-                    color = const Color(0xFF8B949E);
+                    isBubble = false;
+                    textColor = const Color(0xFF8B949E);
                     break;
                   case AvatarState.listening:
                     status = _wordsSpoken.isNotEmpty ? _wordsSpoken : 'Listening to you...';
-                    color = const Color(0xFF3FB950);
+                    isBubble = true;
+                    textColor = const Color(0xFF3FB950);
                     break;
                   case AvatarState.thinking:
                     status = 'Thinking...';
-                    color = const Color(0xFF79C0FF);
+                    isBubble = true;
+                    textColor = const Color(0xFF79C0FF);
                     break;
                   case AvatarState.talking:
-                    status = 'Executing action...';
-                    color = const Color(0xFFE3B341);
+                    final logService = context.watch<LogService>();
+                    String lastMessage = '';
+                    if (logService.entries.isNotEmpty) {
+                      final lastEntry = logService.entries.last;
+                      lastMessage = lastEntry.message
+                          .replaceAll('💭 Nova:', '')
+                          .replaceAll('💭', '')
+                          .replaceAll('✅ Done:', '')
+                          .replaceAll('✅', '')
+                          .replaceAll('🎯 Action:', '')
+                          .replaceAll('🎯', '')
+                          .trim();
+                    }
+                    status = lastMessage.isNotEmpty ? lastMessage : 'Executing action...';
+                    isBubble = true;
+                    textColor = const Color(0xFFE3B341);
                     break;
                 }
+
+                if (!isBubble) {
+                  return AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                    child: Text(
+                      status,
+                      style: TextStyle(
+                        color: textColor,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        fontFamily: 'monospace',
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  );
+                }
+
                 return AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                  child: Text(
-                    status,
-                    style: TextStyle(
-                      color: color,
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                      fontFamily: state == AvatarState.listening ? null : 'monospace',
+                  margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: ClipPath(
+                    clipper: SpeechBubbleClipper(),
+                    child: Container(
+                      color: const Color(0xFF161B22),
+                      padding: const EdgeInsets.only(top: 22, bottom: 14, left: 16, right: 16),
+                      child: Text(
+                        status,
+                        style: TextStyle(
+                          color: textColor,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          fontStyle: state == AvatarState.listening ? FontStyle.italic : FontStyle.normal,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
                     ),
-                    textAlign: TextAlign.center,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
                   ),
                 );
               },
@@ -434,4 +476,38 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+}
+
+class SpeechBubbleClipper extends CustomClipper<Path> {
+  @override
+  Path getClip(Size size) {
+    final path = Path();
+    const double tailHeight = 10.0;
+    const double tailWidth = 14.0;
+    const double radius = 16.0;
+
+    path.moveTo(radius, tailHeight);
+    
+    path.lineTo((size.width / 2) - (tailWidth / 2), tailHeight);
+    path.lineTo(size.width / 2, 0);
+    path.lineTo((size.width / 2) + (tailWidth / 2), tailHeight);
+    
+    path.lineTo(size.width - radius, tailHeight);
+    path.arcToPoint(Offset(size.width, tailHeight + radius), radius: const Radius.circular(radius));
+    
+    path.lineTo(size.width, size.height - radius);
+    path.arcToPoint(Offset(size.width - radius, size.height), radius: const Radius.circular(radius));
+    
+    path.lineTo(radius, size.height);
+    path.arcToPoint(Offset(0, size.height - radius), radius: const Radius.circular(radius));
+    
+    path.lineTo(0, tailHeight + radius);
+    path.arcToPoint(Offset(radius, tailHeight), radius: const Radius.circular(radius));
+    path.close();
+    
+    return path;
+  }
+
+  @override
+  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
 }
