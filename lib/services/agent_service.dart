@@ -333,12 +333,11 @@ class AgentService {
     }
 
     try {
-      final token = _generateToken(apiKey);
       final response = await http.post(
         Uri.parse(_bigModelUrl),
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
+          'Authorization': 'Bearer $apiKey',
         },
         body: jsonEncode({
           'model': _model,
@@ -362,34 +361,6 @@ class AgentService {
     } catch (e) {
       logService.log('⚠ Network error: $e');
       return ('', null);
-    }
-  }
-
-  String _generateToken(String apikey) {
-    try {
-      final parts = apikey.split('.');
-      if (parts.length != 2) return apikey;
-      final id = parts[0];
-      final secret = parts[1];
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final exp = now + 3600000;
-
-      final header = base64Url
-          .encode(utf8.encode(
-              jsonEncode({'alg': 'HS256', 'sign_type': 'SIGN'})))
-          .replaceAll('=', '');
-      final payload = base64Url
-          .encode(utf8.encode(
-              jsonEncode({'api_key': id, 'exp': exp, 'timestamp': now})))
-          .replaceAll('=', '');
-      final signature = Hmac(sha256, utf8.encode(secret))
-          .convert(utf8.encode('$header.$payload'));
-      final signatureB64 =
-          base64Url.encode(signature.bytes).replaceAll('=', '');
-
-      return '$header.$payload.$signatureB64';
-    } catch (e) {
-      return apikey;
     }
   }
 
@@ -534,14 +505,13 @@ class AgentService {
         return;
       }
 
-      final token = _generateToken(apiKey);
       logService.log('🧠 Consulting AI (Chat Mode)...');
 
       final response = await http.post(
         Uri.parse(_bigModelUrl),
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer $token',
+          'Authorization': 'Bearer $apiKey',
         },
         body: jsonEncode({
           'model': 'glm-4-flash',
