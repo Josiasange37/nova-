@@ -178,7 +178,10 @@ class AgentService {
 
   bool get isRunning => _isRunning;
 
-  void stop() => _isRunning = false;
+  void stop() {
+    _isRunning = false;
+    stateNotifier.value = AvatarState.idle;
+  }
 
   Future<void> runTask(String instruction) async {
     if (_isRunning) return;
@@ -244,6 +247,7 @@ class AgentService {
 
         logService.log('🧠 Consulting AI...');
         final (thinking, rawAction) = await _callBigModel();
+        if (!_isRunning) break;
         if (rawAction == null) {
           logService.log('❌ No response from AI.');
           break;
@@ -272,6 +276,7 @@ class AgentService {
         if (action.action == ActionType.unknown) {
           logService.log('⚠ Could not parse action: "$rawAction"');
         } else {
+          if (!_isRunning) break;
           if (action.action != ActionType.wait) {
             stateNotifier.value = AvatarState.talking;
           }
@@ -524,16 +529,19 @@ class AgentService {
       ).timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
+        if (!_isRunning) return;
         final data = jsonDecode(response.body);
         final content = data['choices'][0]['message']['content'] as String? ?? '';
         logService.log('💭 Nova: $content');
 
-        // Transition to talking state to animate mouth
-        stateNotifier.value = AvatarState.talking;
+        if (_isRunning) {
+          // Transition to talking state to animate mouth
+          stateNotifier.value = AvatarState.talking;
 
-        // Simulating speech time based on response length (e.g. 50ms per character, max 5s)
-        final durationMs = min(content.length * 50, 5000);
-        await Future.delayed(Duration(milliseconds: durationMs));
+          // Simulating speech time based on response length (e.g. 50ms per character, max 5s)
+          final durationMs = min(content.length * 50, 5000);
+          await Future.delayed(Duration(milliseconds: durationMs));
+        }
       } else {
         logService.log('⚠ Chat API Error ${response.statusCode}: ${response.body}');
       }
