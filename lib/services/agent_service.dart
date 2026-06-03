@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -187,10 +188,17 @@ class AgentService {
 
     logService.log('▶ Starting task: "$instruction"');
 
-    if (!await LadbService.isConnected()) {
-      logService.log('❌ ADB not connected. Open Settings to pair/connect first.');
-      _isRunning = false;
-      stateNotifier.value = AvatarState.idle;
+    final lowercaseInstruction = instruction.toLowerCase().trim();
+    final isGreeting = _checkIsGreeting(lowercaseInstruction);
+    final adbConnected = await LadbService.isConnected();
+
+    if (isGreeting || !adbConnected) {
+      if (!adbConnected) {
+        logService.log('ℹ ADB not connected. Running in Conversational Chat mode.');
+      } else {
+        logService.log('ℹ Casual greeting/question detected. Running in Conversational Chat mode.');
+      }
+      await _runTextChat(instruction);
       return;
     }
 
@@ -471,6 +479,70 @@ class AgentService {
       case ActionType.finish:
       case ActionType.unknown:
         break;
+    }
+  }
+
+  bool _checkIsGreeting(String text) {
+    final greetings = [
+      'hello', 'hi', 'hey', 'yo', 'halo', 'greetings',
+      'how are you', 'how is it going', 'who are you', 'what is your name',
+      'whats up', 'what\'s up', 'good morning', 'good afternoon', 'good evening',
+      'help', 'test'
+    ];
+    return greetings.any((g) => text.startsWith(g) || text == g);
+  }
+
+  Future<void> _runTextChat(String instruction) async {
+    try {
+      final apiKey = SettingsService.getApiKey();
+      if (apiKey.isEmpty || apiKey == SettingsService.defaultApiKey) {
+        logService.log('❌ Error: No API key configured. Open Setup to set it.');
+        return;
+      }
+
+      final token = _generateToken(apiKey);
+      logService.log('🧠 Consulting AI (Chat Mode)...');
+
+      final response = await http.post(
+        Uri.parse(_bigModelUrl),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({
+          'model': 'glm-4-flash',
+          'messages': [
+            {
+              'role': 'system',
+              'content': 'You are Nova, a helpful and friendly mobile AI assistant. Respond to the user\'s greeting or question in a brief, friendly, and helpful manner (max 2 sentences).'
+            },
+            {'role': 'user', 'content': instruction}
+          ],
+          'max_tokens': 256,
+          'temperature': 0.7,
+        }),
+      ).timeout(const Duration(seconds: 15));
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final content = data['choices'][0]['message']['content'] as String? ?? '';
+        logService.log('💭 Nova: $content');
+
+        // Transition to talking state to animate mouth
+        stateNotifier.value = AvatarState.talking;
+
+        // Simulating speech time based on response length (e.g. 50ms per character, max 5s)
+        final durationMs = min(content.length * 50, 5000);
+        await Future.delayed(Duration(milliseconds: durationMs));
+      } else {
+        logService.log('⚠ Chat API Error ${response.statusCode}: ${response.body}');
+      }
+    } catch (e) {
+      logService.log('⚠ Network error in Chat Mode: $e');
+    } finally {
+      _isRunning = false;
+      stateNotifier.value = AvatarState.idle;
+      logService.log('■ Agent stopped.');
     }
   }
 }
