@@ -33,7 +33,29 @@ class _SetupScreenState extends State<SetupScreen> {
   }
 
   Future<void> _saveApiKey() async {
-    await SettingsService.setApiKey(_apiKeyCtrl.text.trim());
+    final key = _apiKeyCtrl.text.trim();
+    if (key.isEmpty) {
+      if (mounted) setState(() => _status = '❌ API key cannot be empty.');
+      return;
+    }
+
+    if (key.contains('[') || key.contains(']') || key.contains('\n') || key.contains(' ')) {
+      if (mounted) {
+        setState(() => _status = '❌ Invalid format: Key contains logs, brackets, or spaces.\nPlease paste only the raw API key (e.g. id.secret).');
+      }
+      return;
+    }
+
+    // BigModel/Zhipu API keys are formatted as: identifier.secret
+    final regExp = RegExp(r'^[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+$');
+    if (!regExp.hasMatch(key)) {
+      if (mounted) {
+        setState(() => _status = '❌ Invalid key format. Expected "id.secret" format.');
+      }
+      return;
+    }
+
+    await SettingsService.setApiKey(key);
     if (mounted) setState(() => _status = '✓ API key saved');
   }
 
@@ -97,6 +119,16 @@ class _SetupScreenState extends State<SetupScreen> {
               _darkField(_apiKeyCtrl, 'API Key', obscure: true),
               const SizedBox(height: 8),
               _actionButton('Save API Key', _saveApiKey),
+
+              const SizedBox(height: 24),
+              _sectionHeader('🔋 Background Optimization'),
+              const SizedBox(height: 8),
+              const Text(
+                'To prevent the OS from killing Nova or aborting network requests when it goes to the background, please set Nova to "Unrestricted" / "Don\'t optimize" in Battery settings.',
+                style: TextStyle(color: Color(0xFF8B949E), fontSize: 13),
+              ),
+              const SizedBox(height: 8),
+              _actionButton('Open Battery Settings', () => LadbService.openBatterySettings()),
 
               const SizedBox(height: 28),
               _sectionHeader('📡 ADB Connection'),

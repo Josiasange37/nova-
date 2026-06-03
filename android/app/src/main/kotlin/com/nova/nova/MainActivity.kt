@@ -30,9 +30,9 @@ class MainActivity : FlutterActivity() {
                         Thread {
                             try {
                                 val output = runShell(command)
-                                result.success(output)
+                                runOnUiThread { result.success(output) }
                             } catch (e: Exception) {
-                                result.error("ADB_ERROR", e.message, null)
+                                runOnUiThread { result.error("ADB_ERROR", e.message, null) }
                             }
                         }.start()
                     }
@@ -41,9 +41,9 @@ class MainActivity : FlutterActivity() {
                         Thread {
                             try {
                                 val bytes = captureScreenshot()
-                                result.success(bytes)
+                                runOnUiThread { result.success(bytes) }
                             } catch (e: Exception) {
-                                result.error("SCREENSHOT_ERROR", e.message, null)
+                                runOnUiThread { result.error("SCREENSHOT_ERROR", e.message, null) }
                             }
                         }.start()
                     }
@@ -55,9 +55,9 @@ class MainActivity : FlutterActivity() {
                             try {
                                 runAdb("kill-server")
                                 val output = runAdb("pair", "127.0.0.1:$port", code)
-                                result.success(output)
+                                runOnUiThread { result.success(output) }
                             } catch (e: Exception) {
-                                result.error("PAIR_ERROR", e.message, null)
+                                runOnUiThread { result.error("PAIR_ERROR", e.message, null) }
                             }
                         }.start()
                     }
@@ -73,9 +73,9 @@ class MainActivity : FlutterActivity() {
                                 if (output.contains("connected")) {
                                     targetAddress = addr
                                 }
-                                result.success(output)
+                                runOnUiThread { result.success(output) }
                             } catch (e: Exception) {
-                                result.error("CONNECT_ERROR", e.message, null)
+                                runOnUiThread { result.error("CONNECT_ERROR", e.message, null) }
                             }
                         }.start()
                     }
@@ -85,15 +85,26 @@ class MainActivity : FlutterActivity() {
                             try {
                                 val output = runAdb("devices")
                                 val connected = output.lines().any { it.contains("127.0.0.1") && it.contains("device") }
-                                result.success(connected)
+                                runOnUiThread { result.success(connected) }
                                 if (connected && targetAddress == null) {
                                     // Try to auto-pick the address
                                     targetAddress = output.lines().find { it.contains("127.0.0.1") }?.split("\t")?.get(0)?.trim()
                                 }
                             } catch (e: Exception) {
-                                result.success(false)
+                                runOnUiThread { result.success(false) }
                             }
                         }.start()
+                    }
+
+                    "openBatterySettings" -> {
+                        try {
+                            val intent = android.content.Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                            intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            startActivity(intent)
+                            runOnUiThread { result.success(true) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("BATTERY_ERROR", e.message, null) }
+                        }
                     }
 
                     else -> result.notImplemented()

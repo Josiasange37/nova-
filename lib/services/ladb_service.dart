@@ -79,4 +79,10 @@ class LadbService {
   static Future<void> back() async {
     await execute("input keyevent 4");
   }
+
+  static Future<void> openBatterySettings() async {
+    try {
+      await _channel.invokeMethod('openBatterySettings');
+    } catch (_) {}
+  }
 }

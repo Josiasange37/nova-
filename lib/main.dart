@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:nova/services/log_service.dart';
 import 'package:nova/services/settings_service.dart';
-import 'package:nova/ui/home_screen.dart';
+import 'package:nova/ui/splash_screen.dart';
 import 'package:provider/provider.dart';
 
 void main() async {
@@ -34,7 +34,7 @@ class NovaApp extends StatelessWidget {
           surface: const Color(0xFF161B22),
         ),
       ),
-      home: const HomeScreen(),
+      home: const SplashScreen(),
     );
   }
 }

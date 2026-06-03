@@ -332,35 +332,50 @@ class AgentService {
       return ('', null);
     }
 
-    try {
-      final response = await http.post(
-        Uri.parse(_bigModelUrl),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $apiKey',
-        },
-        body: jsonEncode({
-          'model': _model,
-          'messages': _context,
-          'max_tokens': 2048,
-          'temperature': 0.0,
-          'top_p': 0.85,
-        }),
-      ).timeout(const Duration(seconds: 120));
+    int retryCount = 0;
+    const int maxRetries = 2;
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final content =
-            data['choices'][0]['message']['content'] as String? ?? '';
-        return _parseResponse(content);
-      } else {
-        logService.log(
-            '⚠ API Error ${response.statusCode}: ${response.body}');
+    while (true) {
+      final client = http.Client();
+      try {
+        final response = await client.post(
+          Uri.parse(_bigModelUrl),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $apiKey',
+          },
+          body: jsonEncode({
+            'model': _model,
+            'messages': _context,
+            'max_tokens': 2048,
+            'temperature': 0.0,
+            'top_p': 0.85,
+          }),
+        ).timeout(const Duration(seconds: 120));
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          final content =
+              data['choices'][0]['message']['content'] as String? ?? '';
+          return _parseResponse(content);
+        } else {
+          logService.log(
+              '⚠ API Error ${response.statusCode}: ${response.body}');
+          return ('', null);
+        }
+      } catch (e) {
+        client.close();
+        if (retryCount < maxRetries && _isRunning) {
+          retryCount++;
+          logService.log('⚠ Network error: $e. Retrying in 1.5 seconds (Attempt $retryCount/$maxRetries)...');
+          await Future.delayed(const Duration(milliseconds: 1500));
+          continue;
+        }
+        logService.log('⚠ Network error: $e');
         return ('', null);
+      } finally {
+        client.close();
       }
-    } catch (e) {
-      logService.log('⚠ Network error: $e');
-      return ('', null);
     }
   }
 
@@ -456,23 +471,7 @@ class AgentService {
 
       case ActionType.launch:
         final appName = p['app'] as String? ?? '';
-        final package = _resolvePackage(appName);
-        if (package != null) {
-          // Fast: launch by package name using am start
-          await LadbService.execute(
-              'am start -a android.intent.action.MAIN '
-              '-c android.intent.category.LAUNCHER '
-              '-n \$(cmd package resolve-activity --brief $package | tail -1)');
-          // Fallback if resolve fails: use monkey
-          await LadbService.execute(
-              'monkey -p $package -c android.intent.category.LAUNCHER 1');
-          logService.log('  → launch $appName ($package)');
-        } else {
-          // Unknown app name — try monkey with app name as package
-          await LadbService.execute(
-              'monkey -p $appName -c android.intent.category.LAUNCHER 1');
-          logService.log('  → launch (unknown) $appName');
-        }
+        await _launchApp(appName);
         break;
 
       case ActionType.wait:
@@ -507,50 +506,170 @@ class AgentService {
 
       logService.log('🧠 Consulting AI (Chat Mode)...');
 
-      final response = await http.post(
-        Uri.parse(_bigModelUrl),
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $apiKey',
-        },
-        body: jsonEncode({
-          'model': 'glm-4-flash',
-          'messages': [
-            {
-              'role': 'system',
-              'content': 'You are Nova, a helpful and friendly mobile AI assistant. Respond to the user\'s greeting or question in a brief, friendly, and helpful manner (max 2 sentences).'
+      int retryCount = 0;
+      const int maxRetries = 2;
+
+      while (true) {
+        final client = http.Client();
+        try {
+          final response = await client.post(
+            Uri.parse(_bigModelUrl),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $apiKey',
             },
-            {'role': 'user', 'content': instruction}
-          ],
-          'max_tokens': 256,
-          'temperature': 0.7,
-        }),
-      ).timeout(const Duration(seconds: 15));
+            body: jsonEncode({
+              'model': 'glm-4-flash',
+              'messages': [
+                {
+                  'role': 'system',
+                  'content': 'You are Nova, a helpful and friendly mobile AI assistant. Respond to the user\'s greeting or question in a brief, friendly, and helpful manner (max 2 sentences).'
+                },
+                {'role': 'user', 'content': instruction}
+              ],
+              'max_tokens': 256,
+              'temperature': 0.7,
+            }),
+          ).timeout(const Duration(seconds: 15));
 
-      if (response.statusCode == 200) {
-        if (!_isRunning) return;
-        final data = jsonDecode(response.body);
-        final content = data['choices'][0]['message']['content'] as String? ?? '';
-        logService.log('💭 Nova: $content');
+          if (response.statusCode == 200) {
+            if (!_isRunning) return;
+            final data = jsonDecode(response.body);
+            final content = data['choices'][0]['message']['content'] as String? ?? '';
+            logService.log('💭 Nova: $content');
 
-        if (_isRunning) {
-          _speak(content);
-          // Transition to talking state to animate mouth
-          stateNotifier.value = AvatarState.talking;
+            if (_isRunning) {
+              _speak(content);
+              // Transition to talking state to animate mouth
+              stateNotifier.value = AvatarState.talking;
 
-          // Simulating speech time based on response length (e.g. 60ms per character, max 5s)
-          final durationMs = min(content.length * 60, 5000);
-          await Future.delayed(Duration(milliseconds: durationMs));
+              // Simulating speech time based on response length (e.g. 60ms per character, max 5s)
+              final durationMs = min(content.length * 60, 5000);
+              await Future.delayed(Duration(milliseconds: durationMs));
+            }
+            break;
+          } else {
+            logService.log('⚠ Chat API Error ${response.statusCode}: ${response.body}');
+            break;
+          }
+        } catch (e) {
+          client.close();
+          if (retryCount < maxRetries && _isRunning) {
+            retryCount++;
+            logService.log('⚠ Network error in Chat Mode: $e. Retrying (Attempt $retryCount/$maxRetries)...');
+            await Future.delayed(const Duration(milliseconds: 1500));
+            continue;
+          }
+          logService.log('⚠ Network error in Chat Mode: $e');
+          break;
+        } finally {
+          client.close();
         }
-      } else {
-        logService.log('⚠ Chat API Error ${response.statusCode}: ${response.body}');
       }
     } catch (e) {
-      logService.log('⚠ Network error in Chat Mode: $e');
+      logService.log('⚠ Error in Chat Mode: $e');
     } finally {
       _isRunning = false;
       stateNotifier.value = AvatarState.idle;
       logService.log('■ Agent stopped.');
+  }
+
+  Future<void> _launchApp(String appName) async {
+    final lowerAppName = appName.toLowerCase().trim();
+
+    // 1. Check for system standard apps that have universal intents
+    if (lowerAppName == 'camera') {
+      await LadbService.execute('am start -a android.media.action.STILL_IMAGE_CAMERA');
+      logService.log('  → launch Camera via STILL_IMAGE_CAMERA intent');
+      return;
+    } else if (lowerAppName == 'settings') {
+      await LadbService.execute('am start -a android.settings.SETTINGS');
+      logService.log('  → launch Settings via settings intent');
+      return;
     }
+
+    // 2. Resolve package from our static database first
+    String? package = _resolvePackage(appName);
+
+    // 3. Fallback: query all installed packages on the device to find a match
+    if (package == null || package == appName) {
+      logService.log('🔍 Looking up package for "$appName" on the device...');
+      final devicePkg = await _findPackageOnDevice(appName);
+      if (devicePkg != null) {
+        package = devicePkg;
+        logService.log('  → Found installed package: $package');
+      }
+    }
+
+    // 4. Fallback for camera/settings in case the intent didn't fire (just in case)
+    if (package == null) {
+      if (lowerAppName.contains('camera')) {
+        package = await _findPackageOnDevice('camera');
+      } else if (lowerAppName.contains('setting')) {
+        package = await _findPackageOnDevice('setting');
+      }
+    }
+
+    final targetPackage = package ?? appName;
+
+    // 5. Try launching using resolve-activity
+    final resolveOut = await LadbService.execute(
+        'cmd package resolve-activity --brief $targetPackage');
+    if (resolveOut.isNotEmpty &&
+        !resolveOut.contains('Error') &&
+        !resolveOut.contains('No activity')) {
+      final activity = resolveOut.split('\n').last.trim();
+      if (activity.isNotEmpty && activity.contains('/')) {
+        await LadbService.execute('am start -n $activity');
+        logService.log('  → launch $appName ($targetPackage) via activity: $activity');
+        return;
+      }
+    }
+
+    // 6. Fallback: use monkey
+    await LadbService.execute(
+        'monkey -p $targetPackage -c android.intent.category.LAUNCHER 1');
+    logService.log('  → launch $appName ($targetPackage) via monkey');
+  }
+
+  Future<String?> _findPackageOnDevice(String keyword) async {
+    try {
+      final lowerKeyword = keyword.toLowerCase().trim();
+      final out = await LadbService.execute('pm list packages');
+      if (out.isEmpty || out.contains('Error')) return null;
+
+      final lines = out.split('\n');
+      // Look for exact ending or last path component matching keyword
+      for (var line in lines) {
+        if (line.contains('package:')) {
+          final pkg = line.replaceAll('package:', '').trim();
+          final parts = pkg.split('.');
+          if (parts.isNotEmpty && parts.last.toLowerCase() == lowerKeyword) {
+            return pkg;
+          }
+        }
+      }
+      // Look for suffix matching
+      for (var line in lines) {
+        if (line.contains('package:')) {
+          final pkg = line.replaceAll('package:', '').trim();
+          if (pkg.toLowerCase().endsWith('.$lowerKeyword')) {
+            return pkg;
+          }
+        }
+      }
+      // Look for substring match anywhere in the package name
+      for (var line in lines) {
+        if (line.contains('package:')) {
+          final pkg = line.replaceAll('package:', '').trim();
+          if (pkg.toLowerCase().contains(lowerKeyword)) {
+            return pkg;
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Failed to query device packages: $e');
+    }
+    return null;
   }
 }
