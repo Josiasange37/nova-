@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'package:nova/services/agent_service.dart';
 import 'package:nova/services/ladb_service.dart';
@@ -203,12 +204,28 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
-          if (_currentTab == 1)
+          if (_currentTab == 1) ...[
+            IconButton(
+              icon: const Icon(Icons.copy_all_outlined, color: Color(0xFF8B949E)),
+              onPressed: () {
+                final allLogs = context.read<LogService>().entries.map((e) => '[${e.timeStr}] ${e.message}').join('\n');
+                Clipboard.setData(ClipboardData(text: allLogs));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Logs copied to clipboard'),
+                    behavior: SnackBarBehavior.floating,
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              },
+              tooltip: 'Copy all logs',
+            ),
             IconButton(
               icon: const Icon(Icons.delete_sweep_outlined, color: Color(0xFF8B949E)),
               onPressed: () => context.read<LogService>().clear(),
               tooltip: 'Clear logs',
             ),
+          ],
         ],
       ),
       body: IndexedStack(
