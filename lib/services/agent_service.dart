@@ -572,6 +572,7 @@ class AgentService {
       _isRunning = false;
       stateNotifier.value = AvatarState.idle;
       logService.log('■ Agent stopped.');
+    }
   }
 
   Future<void> _launchApp(String appName) async {
